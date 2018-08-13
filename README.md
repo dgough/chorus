@@ -1,2 +1,4 @@
 # chorus
-C++14 Concurrency classes
+Work in progress
+
+- [`ObjectPool`](/include/chorus/ObjectPool.hpp)

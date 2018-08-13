@@ -1,3 +1,19 @@
+*.sdf
+*.user
+Debug
+Release
+x64
+*.opendb
+*.ipch
+*.vsp
+*.psess
+
+# directories
+/notes
+/external-deps
+/html
+/.vs
+
 # Prerequisites
 *.d
 

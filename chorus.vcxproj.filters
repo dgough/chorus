@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="tests">
+      <UniqueIdentifier>{eac1f1bc-3f26-4eb1-8637-9a47cb7120a8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="chorus">
+      <UniqueIdentifier>{b439e4b5-6811-45a8-b90c-0de59d4610a2}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="tests\main_tests.cpp">
+      <Filter>tests</Filter>
+    </ClCompile>
+    <ClCompile Include="tests\test_ObjectPool.cpp">
+      <Filter>tests</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\chorus\ObjectPool.hpp">
+      <Filter>chorus</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
