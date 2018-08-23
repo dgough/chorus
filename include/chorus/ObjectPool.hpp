@@ -3,11 +3,11 @@
 #ifndef CHORUS_OBJECT_POOl_H
 #define CHORUS_OBJECT_POOl_H
 
-#include <mutex>
 #include <deque>
-#include <future>
-#include <thread>
 #include <memory>
+#include <thread>
+#include <mutex>
+#include <future>
 #include <cassert>
 
 // This macro can be used to specify an alternative condition variable class
@@ -35,12 +35,12 @@ public:
  * Unlike other smart pointers, this class does not support release().
  */
 template<typename T>
-class PoolHandle {
+class PoolHandle final {
 public:
     /**
      * Creates an empty PoolHandle.
      */
-    PoolHandle() {};
+    PoolHandle() = default;
 
     /**
      * Creates a PoolHandle an assigns it a unique_ptr to manage.
@@ -53,7 +53,7 @@ public:
      * The destructor will put the object back into the pool.
      * If the pool was destroyed then the object will also be destroyed.
      */
-    virtual ~PoolHandle();
+    ~PoolHandle();
 
     // Not copyable
     PoolHandle(const PoolHandle&) = delete;
@@ -79,11 +79,18 @@ public:
         return static_cast<bool>(m_ptr);
     }
 
-    void reset() noexcept {
-        m_ptr.reset();
-        m_pool.reset();
-    }
+    /**
+     * Resets the PoolHandle and releases ownership of the object.
+     * Similar to the destructor, if this handle is linked to a pool then the object will be added
+     * back to the pool otherwise the object will be destroyed.
+     */
+    void reset();
 private:
+    /**
+     * Returns the managed object to the pool if it still exists.
+     */
+    void returnObject();
+
     std::unique_ptr<T> m_ptr;
     std::weak_ptr<IObjectPool<T>> m_pool;
 };
@@ -113,9 +120,23 @@ public:
 
     /**
      * Borrows one of the objects from the pool.
-     * Returns a handle to the borrowed object. The object is returned to the pool when the handle is destroyed.
+     * Returns a handle to the borrowed object.
+     * The borrowed object is returned to the pool when the handle is destroyed.
      */
     PoolHandle<T> borrow();
+
+    /**
+     * Similar to borrow() except if waitDuration expires then an empty PoolHandle is returned.
+     * Passing a negative duration is the same as passing zero (meaning don't wait).
+     */
+    template<typename Rep, typename Period>
+    PoolHandle<T> borrow(const std::chrono::duration<Rep, Period>& waitDuration);
+
+    /**
+     * Similar to borrow() except if timeoutTime expires then an empty PoolHandle is returned.
+     */
+    template<class Clock, class Duration>
+    PoolHandle<T> borrow(const std::chrono::time_point<Clock, Duration>& timeoutTime);
 
     /**
      * Adds an object to the pool.
@@ -148,9 +169,21 @@ private:
 
 template<typename T>
 PoolHandle<T>::~PoolHandle() {
+    returnObject();
+}
+
+template<typename T>
+void PoolHandle<T>::returnObject() {
     if (auto pool = m_pool.lock()) {
         pool->add(std::move(m_ptr));
     }
+}
+
+template<typename T>
+void PoolHandle<T>::reset() {
+    returnObject();
+    m_ptr.reset();
+    m_pool.reset();
 }
 
 // ObjectPool<T>
@@ -186,6 +219,54 @@ typename PoolHandle<T> ObjectPool<T>::borrow() {
         return objectAvailable();
     });
     return getNextHandle();
+}
+
+template<typename T>
+template<typename Rep, typename Period>
+typename PoolHandle<T> ObjectPool<T>::borrow(const std::chrono::duration<Rep, Period>& waitDuration) {
+    // on Windows time_point::max() wasn't working and anything over 2135819 hours also wasn't working.
+    // 2 million hours (~228 years) should be a long enough wait time.
+    static constexpr auto MaxTimePoint = std::chrono::time_point<std::chrono::steady_clock>(std::chrono::hours(2000000));
+    std::chrono::steady_clock::time_point timePoint;
+    auto now = std::chrono::steady_clock::now();
+    if (waitDuration < std::chrono::duration<Rep, Period>::zero()) {
+        timePoint = now;
+    }
+    else if (now > MaxTimePoint - waitDuration) {
+        // would have overflowed
+        timePoint = MaxTimePoint;
+    }
+    else {
+        timePoint = now + waitDuration;
+    }
+    return borrow(timePoint);
+}
+
+template<typename T>
+template<class Clock, class Duration>
+typename PoolHandle<T> ObjectPool<T>::borrow(const std::chrono::time_point<Clock, Duration>& timeoutTime) {
+    std::unique_lock<std::mutex> lk(m_mutex);
+
+    // if the object is available then no need to queue
+    if (objectAvailable()) {
+        return getNextHandle();
+    }
+
+    // join the waiting queue
+    m_waitingQueue.emplace_back();
+    auto future = m_waitingQueue.back().get_future();
+    lk.unlock();
+
+    // wait until it is this thread's turn
+    if (future.wait_until(timeoutTime) == std::future_status::timeout) {
+        return PoolHandle<T>(); // empty pool handle
+    }
+    future.get();
+    lk.lock();
+    bool available = m_cond.wait_until(lk, timeoutTime, [this] {
+        return objectAvailable();
+    });
+    return available ? getNextHandle() : PoolHandle<T>();
 }
 
 template<typename T>

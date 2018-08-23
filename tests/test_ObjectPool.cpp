@@ -5,6 +5,10 @@
 #include <vector>
 
 using std::string;
+using std::chrono::steady_clock;
+using std::chrono::seconds;
+using std::chrono::milliseconds;
+using std::chrono::nanoseconds;
 
 namespace chorus {
 
@@ -40,7 +44,7 @@ TEST(ObjectPool, order) {
         ASSERT_NE(nullptr, handle);
         EXPECT_EQ(expectedChar, handle->at(0));
         handle->operator[](0) += 1;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(milliseconds(1));
     };
 
     std::vector<std::future<void>> asyncResults;
@@ -81,6 +85,70 @@ TEST(ObjectPool, destroyPool) {
     EXPECT_FALSE(itemDestroyed.load());
     handle.reset();
     EXPECT_TRUE(itemDestroyed.load());
+}
+
+TEST(ObjectPool, waitRelativeTime) {
+    // waits a relative amount of time and ensures that time has passed
+    auto pool = ObjectPool<string>::create();
+    constexpr auto waitTime = milliseconds(50);
+    auto start = steady_clock::now();
+    auto handle = pool->borrow(waitTime);
+    EXPECT_EQ(nullptr, handle);
+    auto delta = steady_clock::now() - start;
+    EXPECT_GE(delta, waitTime);
+}
+
+TEST(ObjectPool, waitMaxDuration) {
+    // Tests waiting to borrow for max duration.
+    // Make sure there isn't an overflow bug that results in returning immediately.
+    auto pool = ObjectPool<string>::create();
+    static constexpr auto waitTime = milliseconds(60);
+    auto start = steady_clock::now();
+    auto thread = std::thread([pool] {
+        std::this_thread::sleep_for(waitTime);
+        pool->add(std::make_unique<string>());
+    });
+    auto handle = pool->borrow(nanoseconds::max());
+    EXPECT_NE(nullptr, handle);
+    auto delta = steady_clock::now() - start;
+    EXPECT_GE(delta, waitTime);
+    thread.join();
+}
+
+TEST(ObjectPool, negativeDuration) {
+    // Negative durations shouldn't wait
+    auto pool = ObjectPool<string>::create();
+    auto handle = pool->borrow(seconds(-30));
+    EXPECT_EQ(nullptr, handle);
+
+    pool->add(std::make_unique<string>("stuff"));
+    handle = pool->borrow(seconds(-30));
+    ASSERT_NE(nullptr, handle);
+    EXPECT_EQ(*handle, "stuff");
+}
+
+TEST(ObjectPool, waitTimePoint) {
+    // waits until a specific time point and ensures that time has passed
+    auto pool = ObjectPool<string>::create();
+    constexpr auto waitTime = milliseconds(50);
+    auto start = steady_clock::now();
+    auto handle = pool->borrow(steady_clock::now() + waitTime);
+    EXPECT_EQ(nullptr, handle);
+    auto delta = steady_clock::now() - start;
+    EXPECT_GE(delta, waitTime);
+}
+
+TEST(ObjectPool, resetHandle) {
+    auto pool = ObjectPool<string>::create();
+    pool->add(std::make_unique<string>("stuff"));
+    auto handle = pool->borrow();
+    ASSERT_NE(nullptr, handle);
+    handle.reset();
+    EXPECT_EQ(nullptr, handle);
+    
+    // the object should have been put back into the pool
+    handle = pool->borrow(steady_clock::now());
+    ASSERT_NE(nullptr, handle);
 }
 
 } // namespace chorus
