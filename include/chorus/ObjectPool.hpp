@@ -8,6 +8,8 @@
 #include <thread>
 #include <mutex>
 #include <future>
+#include <atomic>
+#include <algorithm>
 #include <cassert>
 
 // This macro can be used to specify an alternative condition variable class
@@ -63,6 +65,12 @@ public:
     PoolHandle(PoolHandle&&) = default;
     PoolHandle& operator=(PoolHandle&&) = default;
 
+    PoolHandle(std::nullptr_t) noexcept {}
+    PoolHandle& operator=(std::nullptr_t);
+
+    /**
+     * Returns a pointer to the managed object.
+     */
     T* get() const noexcept {
         return m_ptr.get();
     }
@@ -75,6 +83,9 @@ public:
         return m_ptr.get();
     }
 
+    /**
+     * Returns true if this PoolHandle is managing an object; false otherwise.
+     */
     explicit operator bool() const noexcept {
         return static_cast<bool>(m_ptr);
     }
@@ -98,7 +109,7 @@ private:
 /**
  * ObjectPool is a thread safe pool of objects that can be borrowed.
  * If there are no objects available to be borrowed then the requesting threads 
-  * will be places in a FIFO queue.
+ * will be places in a FIFO queue.
  */
 template<typename T>
 class ObjectPool : public IObjectPool<T>, public std::enable_shared_from_this<ObjectPool<T>> {
@@ -145,6 +156,12 @@ public:
     void add(std::unique_ptr<T> object) override;
 
 private:
+    struct WaitingThread {
+        WaitingThread() : id(std::this_thread::get_id()) {}
+
+        std::thread::id id;
+        std::promise<void> promise;
+    };
 
     /**
      * Returns true if an object is available in the pool.
@@ -159,8 +176,13 @@ private:
      */
     PoolHandle<T> getNextHandle();
 
+    /**
+     * Removes the calling thread from the waiting queue.
+     */
+    void removeSelfFromQueue();
+
     std::deque<std::unique_ptr<T>> m_objects;
-    std::deque<std::promise<void>> m_waitingQueue;
+    std::deque<WaitingThread> m_waitingQueue;
     CONDITION_VARIABLE m_cond;
     mutable std::mutex m_mutex;
 };
@@ -170,6 +192,12 @@ private:
 template<typename T>
 PoolHandle<T>::~PoolHandle() {
     returnObject();
+}
+
+template<typename T>
+PoolHandle<T>& PoolHandle<T>::operator=(nullptr_t) {
+    reset();
+    return *this;
 }
 
 template<typename T>
@@ -199,7 +227,7 @@ typename ObjectPool<T>::SharedPtr ObjectPool<T>::create() {
 }
 
 template<typename T>
-typename PoolHandle<T> ObjectPool<T>::borrow() {
+PoolHandle<T> ObjectPool<T>::borrow() {
     std::unique_lock<std::mutex> lk(m_mutex);
     
     // if the object is available then no need to queue
@@ -209,7 +237,7 @@ typename PoolHandle<T> ObjectPool<T>::borrow() {
 
     // join the waiting queue
     m_waitingQueue.emplace_back();
-    auto future = m_waitingQueue.back().get_future();
+    auto future = m_waitingQueue.back().promise.get_future();
     lk.unlock();
 
     // wait until it is this thread's turn
@@ -223,7 +251,7 @@ typename PoolHandle<T> ObjectPool<T>::borrow() {
 
 template<typename T>
 template<typename Rep, typename Period>
-typename PoolHandle<T> ObjectPool<T>::borrow(const std::chrono::duration<Rep, Period>& waitDuration) {
+PoolHandle<T> ObjectPool<T>::borrow(const std::chrono::duration<Rep, Period>& waitDuration) {
     // on Windows time_point::max() wasn't working and anything over 2135819 hours also wasn't working.
     // 2 million hours (~228 years) should be a long enough wait time.
     static constexpr auto MaxTimePoint = std::chrono::time_point<std::chrono::steady_clock>(std::chrono::hours(2000000));
@@ -244,7 +272,7 @@ typename PoolHandle<T> ObjectPool<T>::borrow(const std::chrono::duration<Rep, Pe
 
 template<typename T>
 template<class Clock, class Duration>
-typename PoolHandle<T> ObjectPool<T>::borrow(const std::chrono::time_point<Clock, Duration>& timeoutTime) {
+PoolHandle<T> ObjectPool<T>::borrow(const std::chrono::time_point<Clock, Duration>& timeoutTime) {
     std::unique_lock<std::mutex> lk(m_mutex);
 
     // if the object is available then no need to queue
@@ -252,21 +280,32 @@ typename PoolHandle<T> ObjectPool<T>::borrow(const std::chrono::time_point<Clock
         return getNextHandle();
     }
 
+    // don't bother joining the queue if the time point isn't a future time point
+    if (timeoutTime <= std::chrono::steady_clock::now()) {
+        return nullptr;
+    }
+
     // join the waiting queue
     m_waitingQueue.emplace_back();
-    auto future = m_waitingQueue.back().get_future();
+    auto future = m_waitingQueue.back().promise.get_future();
     lk.unlock();
 
     // wait until it is this thread's turn
     if (future.wait_until(timeoutTime) == std::future_status::timeout) {
-        return PoolHandle<T>(); // empty pool handle
+        removeSelfFromQueue();
+        return nullptr;
     }
     future.get();
+
     lk.lock();
     bool available = m_cond.wait_until(lk, timeoutTime, [this] {
         return objectAvailable();
     });
-    return available ? getNextHandle() : PoolHandle<T>();
+    if (available) {
+        return getNextHandle();
+    }
+    removeSelfFromQueue();
+    return nullptr;
 }
 
 template<typename T>
@@ -277,7 +316,7 @@ void ObjectPool<T>::add(std::unique_ptr<T> object) {
     std::unique_lock<std::mutex> lk(m_mutex);
     m_objects.push_back(std::move(object));
     if (!m_waitingQueue.empty()) {
-        m_waitingQueue.front().set_value();
+        m_waitingQueue.front().promise.set_value();
         m_waitingQueue.pop_front();
     }
     lk.unlock();
@@ -299,25 +338,37 @@ PoolHandle<T> ObjectPool<T>::getNextHandle() {
     return handle;
 }
 
+template<typename T>
+void ObjectPool<T>::removeSelfFromQueue() {
+    // assumes mutex is already locked
+    auto id = std::this_thread::get_id();
+    auto it = std::find_if(m_waitingQueue.begin(), m_waitingQueue.end(), [id](const WaitingThread& w) {
+        return w.id == id;
+    });
+    if (it != m_waitingQueue.end()) {
+        m_waitingQueue.erase(it);
+    }
+}
+
 // equality operators
 
 template<typename T>
-bool operator==(const PoolHandle<T>& handle, nullptr_t) noexcept {
+bool operator==(const PoolHandle<T>& handle, std::nullptr_t) noexcept {
     return handle.get() == nullptr;
 }
 
 template<typename T>
-bool operator==(nullptr_t, const PoolHandle<T>& handle) noexcept {
+bool operator==(std::nullptr_t, const PoolHandle<T>& handle) noexcept {
     return handle.get() == nullptr;
 }
 
 template<typename T>
-bool operator!=(const PoolHandle<T>& handle, nullptr_t) noexcept {
+bool operator!=(const PoolHandle<T>& handle, std::nullptr_t) noexcept {
     return !(handle == nullptr);
 }
 
 template<typename T>
-bool operator!=(nullptr_t, const PoolHandle<T>& handle) noexcept {
+bool operator!=(std::nullptr_t, const PoolHandle<T>& handle) noexcept {
     return !(handle == nullptr);
 }
 

@@ -31,6 +31,25 @@ TEST(ObjectPool, basic) {
     EXPECT_STREQ(str, handle->c_str());
 }
 
+TEST(ObjectPool, nullptrHandle) {
+    PoolHandle<string> handle(nullptr);
+    EXPECT_EQ(nullptr, handle);
+
+    auto pool = ObjectPool<string>::create();
+    pool->add(std::make_unique<string>("str"));
+    handle = pool->borrow();
+    EXPECT_NE(nullptr, handle);
+    EXPECT_NE(nullptr, handle.get());
+    EXPECT_STREQ("str", handle->c_str());
+    handle = nullptr;
+    EXPECT_EQ(nullptr, handle);
+    auto handle2 = pool->borrow();
+    EXPECT_NE(nullptr, handle2);
+    handle = std::move(handle2);
+    EXPECT_EQ(nullptr, handle2);
+    EXPECT_NE(nullptr, handle);
+}
+
 TEST(ObjectPool, order) {
     // test to make sure that the threads that borrow the object get it in the correct order
     auto pool = ObjectPool<string>::create();
@@ -145,10 +164,32 @@ TEST(ObjectPool, resetHandle) {
     ASSERT_NE(nullptr, handle);
     handle.reset();
     EXPECT_EQ(nullptr, handle);
-    
+
     // the object should have been put back into the pool
     handle = pool->borrow(steady_clock::now());
     ASSERT_NE(nullptr, handle);
+}
+
+TEST(ObjectPool, removeFromQueue) {
+    // tests that a thread is removed from waiting queue if it stops waiting
+    auto pool = ObjectPool<string>::create();
+
+    auto t1 = std::thread([pool] {
+        auto handle = pool->borrow(milliseconds(5));
+        EXPECT_EQ(nullptr, handle);
+    });
+    t1.join();
+
+    constexpr auto maxWaitTime = seconds(5);
+    auto t2 = std::thread([pool] {
+        std::this_thread::sleep_for(milliseconds(30));
+        pool->add(std::make_unique<string>("word"));
+    });
+    auto start = steady_clock::now();
+    auto handle = pool->borrow(maxWaitTime);
+    EXPECT_NE(nullptr, handle);
+    EXPECT_LT(steady_clock::now() - start, maxWaitTime);
+    t2.join();
 }
 
 } // namespace chorus
