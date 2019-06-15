@@ -1,8 +1,5 @@
 #pragma once
 
-#ifndef CHORUS_OBJECT_POOl_H
-#define CHORUS_OBJECT_POOl_H
-
 #include <deque>
 #include <memory>
 #include <thread>
@@ -21,41 +18,28 @@
 
 namespace chorus {
 
-// This class exists because SonarQube hates forward declarations
 template<typename T>
-class IObjectPool {
-public:
-    virtual ~IObjectPool() {}
-    virtual void add(std::unique_ptr<T> object) = 0;
-};
+class ObjectPool;
 
-/**
- * PoolHandle is a smart pointer that manages an object through a pointer and puts that object
- * back in the linked ObjectPool when the PoolHandle is destroyed.
- * If the ObjectPool was destroyed then the managed object is destroyed.
- * 
- * Unlike other smart pointers, this class does not support release().
- */
+/// PoolHandle is a smart pointer that manages an object through a pointer and puts
+/// that object back in the linked ObjectPool when the PoolHandle is destroyed.
+/// If the ObjectPool was destroyed then the managed object is destroyed.
+/// Unlike other smart pointers, this class does not support release().
 template<typename T>
 class PoolHandle final {
 public:
-    /**
-     * Creates an empty PoolHandle.
-     */
+    /// Creates an empty PoolHandle.
     PoolHandle() = default;
 
-    /**
-     * Creates a PoolHandle an assigns it a unique_ptr to manage.
-     * @param[in] ptr  The unique_ptr that this handle manages.
-     * @param[in] pool The object pool that this handle will add the object to.
-     */
-    PoolHandle(std::unique_ptr<T> ptr, std::shared_ptr<IObjectPool<T>> pool) 
+    /// Creates a PoolHandle an assigns it a unique_ptr to manage.
+    /// @param[in] ptr  The unique_ptr that this handle manages.
+    /// @param[in] pool The object pool that this handle will add the object to.
+    PoolHandle(std::unique_ptr<T> ptr, std::shared_ptr<ObjectPool<T>> pool)
         : m_ptr(std::move(ptr)), m_pool(pool) {}
-    /**
-     * The destructor will put the object back into the pool.
-     * If the pool was destroyed then the object will also be destroyed.
-     */
-    ~PoolHandle();
+
+    /// The destructor will put the object back into the pool.
+    /// If the pool was destroyed then the object will also be destroyed.
+    ~PoolHandle() noexcept;
 
     // Not copyable
     PoolHandle(const PoolHandle&) = delete;
@@ -68,9 +52,7 @@ public:
     PoolHandle(std::nullptr_t) noexcept {}
     PoolHandle& operator=(std::nullptr_t);
 
-    /**
-     * Returns a pointer to the managed object.
-     */
+    /// Returns a pointer to the managed object.
     T* get() const noexcept {
         return m_ptr.get();
     }
@@ -83,77 +65,60 @@ public:
         return m_ptr.get();
     }
 
-    /**
-     * Returns true if this PoolHandle is managing an object; false otherwise.
-     */
+    /// Returns true if this PoolHandle is managing an object; false otherwise.
     explicit operator bool() const noexcept {
         return static_cast<bool>(m_ptr);
     }
 
-    /**
-     * Resets the PoolHandle and releases ownership of the object.
-     * Similar to the destructor, if this handle is linked to a pool then the object will be added
-     * back to the pool otherwise the object will be destroyed.
-     */
+    /// Resets the PoolHandle and releases ownership of the object.
+    /// Similar to the destructor, if this handle is linked to a pool then the object will be added
+    /// back to the pool otherwise the object will be destroyed.
     void reset();
+
 private:
-    /**
-     * Returns the managed object to the pool if it still exists.
-     */
+    /// Returns the managed object to the pool if it still exists.
     void returnObject();
 
     std::unique_ptr<T> m_ptr;
-    std::weak_ptr<IObjectPool<T>> m_pool;
+    std::weak_ptr<ObjectPool<T>> m_pool;
 };
 
-/**
- * ObjectPool is a thread safe pool of objects that can be borrowed.
- * If there are no objects available to be borrowed then the requesting threads 
- * will be places in a FIFO queue.
- */
+/// ObjectPool is a thread safe pool of objects that can be borrowed.
+/// If there are no objects available to be borrowed then the
+/// requesting threads will be placed in a FIFO queue.
 template<typename T>
-class ObjectPool : public IObjectPool<T>, public std::enable_shared_from_this<ObjectPool<T>> {
+class ObjectPool : public std::enable_shared_from_this<ObjectPool<T>> {
 public:
     using SharedPtr = std::shared_ptr<ObjectPool<T>>;
 
     // This class must be instantiated with a shared_ptr. Use the static create method instead.
     ObjectPool() {}
-    virtual ~ObjectPool();
+    virtual ~ObjectPool() noexcept = default;
 
     // Not copyable and not movable
     ObjectPool(const ObjectPool&) = delete;
     ObjectPool& operator=(const ObjectPool&) = delete;
 
-    /**
-     * Creates an empty ObjectPool.
-     */
+    /// Creates an empty ObjectPool.
     static ObjectPool::SharedPtr create();
 
-    /**
-     * Borrows one of the objects from the pool.
-     * Returns a handle to the borrowed object.
-     * The borrowed object is returned to the pool when the handle is destroyed.
-     */
+    /// Borrows one of the objects from the pool.
+    /// Returns a handle to the borrowed object.
+    /// The borrowed object is returned to the pool when the handle is destroyed.
     PoolHandle<T> borrow();
 
-    /**
-     * Similar to borrow() except if waitDuration expires then an empty PoolHandle is returned.
-     * Passing a negative duration is the same as passing zero (meaning don't wait).
-     */
+    /// Similar to borrow() except if waitDuration expires then an empty PoolHandle is returned.
+    /// Passing a negative duration is the same as passing zero (meaning don't wait).
     template<typename Rep, typename Period>
     PoolHandle<T> borrow(const std::chrono::duration<Rep, Period>& waitDuration);
 
-    /**
-     * Similar to borrow() except if timeoutTime expires then an empty PoolHandle is returned.
-     */
+    /// Similar to borrow() except if timeoutTime expires then an empty PoolHandle is returned.
     template<class Clock, class Duration>
     PoolHandle<T> borrow(const std::chrono::time_point<Clock, Duration>& timeoutTime);
 
-    /**
-     * Adds an object to the pool.
-     * This object will be owned by the pool and available to be borrowed.
-     */
-    void add(std::unique_ptr<T> object) override;
+    /// Adds an object to the pool.
+    /// This object will be owned by the pool and available to be borrowed.
+    void add(std::unique_ptr<T> object);
 
 private:
     struct WaitingThread {
@@ -163,22 +128,16 @@ private:
         std::promise<void> promise;
     };
 
-    /**
-     * Returns true if an object is available in the pool.
-     * Only call this method while the mutex is locked.
-     */
+    /// Returns true if an object is available in the pool.
+    /// Only call this method while the mutex is locked.
     inline bool objectAvailable() const;
 
-    /**
-     * Returns a handle to the next object.
-     * This method must be called while the mutex is locked by this thread
-     * and while the objects collection is not empty.
-     */
+    /// Returns a handle to the next object.
+    /// This method must be called while the mutex is locked by this thread
+    /// and while the objects collection is not empty.
     PoolHandle<T> getNextHandle();
 
-    /**
-     * Removes the calling thread from the waiting queue.
-     */
+    /// Removes the calling thread from the waiting queue.
     void removeSelfFromQueue();
 
     std::deque<std::unique_ptr<T>> m_objects;
@@ -190,7 +149,7 @@ private:
 // PoolHandle<T>
 
 template<typename T>
-PoolHandle<T>::~PoolHandle() {
+PoolHandle<T>::~PoolHandle() noexcept {
     returnObject();
 }
 
@@ -217,19 +176,14 @@ void PoolHandle<T>::reset() {
 // ObjectPool<T>
 
 template<typename T>
-ObjectPool<T>::~ObjectPool() {
-    // TODO: log error if m_waitingQueue is not empty
-}
-
-template<typename T>
 typename ObjectPool<T>::SharedPtr ObjectPool<T>::create() {
-    return std::make_shared<ObjectPool<T>>(); 
+    return std::make_shared<ObjectPool<T>>();
 }
 
 template<typename T>
 PoolHandle<T> ObjectPool<T>::borrow() {
     std::unique_lock<std::mutex> lk(m_mutex);
-    
+
     // if the object is available then no need to queue
     if (objectAvailable()) {
         return getNextHandle();
@@ -373,5 +327,3 @@ bool operator!=(std::nullptr_t, const PoolHandle<T>& handle) noexcept {
 }
 
 } // namespace chorus
-
-#endif CHORUS_OBJECT_POOl_H

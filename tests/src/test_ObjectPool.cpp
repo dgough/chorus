@@ -1,16 +1,16 @@
 #include <gtest/gtest.h>
-#include <ObjectPool.hpp>
+#include <chorus/ObjectPool.hpp>
 #include <string>
 #include <future>
 #include <vector>
+
+namespace chorus {
 
 using std::string;
 using std::chrono::steady_clock;
 using std::chrono::seconds;
 using std::chrono::milliseconds;
 using std::chrono::nanoseconds;
-
-namespace chorus {
 
 TEST(ObjectPool, emptyHandle) {
     PoolHandle<string> handle;

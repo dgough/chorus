@@ -1,9 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.27703.2035
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.29009.5
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "chorus", "chorus.vcxproj", "{BBF97630-A179-4CD7-BB85-41C0BF82795A}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "tests", "tests\tests.vcxproj", "{82066F19-E7A9-4D8E-8787-E280A767ED85}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -11,15 +11,15 @@ Global
 		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{BBF97630-A179-4CD7-BB85-41C0BF82795A}.Debug|x64.ActiveCfg = Debug|x64
-		{BBF97630-A179-4CD7-BB85-41C0BF82795A}.Debug|x64.Build.0 = Debug|x64
-		{BBF97630-A179-4CD7-BB85-41C0BF82795A}.Release|x64.ActiveCfg = Release|x64
-		{BBF97630-A179-4CD7-BB85-41C0BF82795A}.Release|x64.Build.0 = Release|x64
+		{82066F19-E7A9-4D8E-8787-E280A767ED85}.Debug|x64.ActiveCfg = Debug|x64
+		{82066F19-E7A9-4D8E-8787-E280A767ED85}.Debug|x64.Build.0 = Debug|x64
+		{82066F19-E7A9-4D8E-8787-E280A767ED85}.Release|x64.ActiveCfg = Release|x64
+		{82066F19-E7A9-4D8E-8787-E280A767ED85}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {571B0ABF-1504-4C1C-A4AD-1A1FDD14964B}
+		SolutionGuid = {5831A3EF-78A2-47F7-A780-538FAAB128EA}
 	EndGlobalSection
 EndGlobal
